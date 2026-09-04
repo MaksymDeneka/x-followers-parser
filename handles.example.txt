@@ -1,0 +1,6 @@
+# one handle per line, or comma-separated
+# lines starting with # are ignored
+elonmusk
+XDevelopers
+https://x.com/nasa
+@github

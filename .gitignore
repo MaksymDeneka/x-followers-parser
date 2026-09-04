@@ -1,0 +1,21 @@
+# run outputs — never commit these (may contain handle lists)
+*.csv
+*.jsonl
+*.state.jsonl
+*.json
+!handles.example.txt
+!setup.cfg
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# macOS / editors
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,17 @@
+#!/usr/bin/env python3
+"""x-followers executable: handles in -> follower counts out.
+
+Works from any directory; no install needed (the package lives next to
+this script). For a global `x-followers` command, symlink this file into a
+directory on your PATH, e.g.:
+    ln -s "$PWD/x-followers" /opt/homebrew/bin/x-followers
+"""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+
+from x_followers_parser.cli import main
+
+if __name__ == "__main__":
+    raise SystemExit(main())
