@@ -120,7 +120,6 @@ protects a 10k run from burning 20 min on a dead provider),
 x-followers -i big.txt --suspended-only --format csv -o suspended.csv
 # exits 1 when any are found, 0 when none — script-friendly
 ```
-
 Suspended accounts show as `SUSPENDED` in tables and `"status": "suspended"`
 in csv/json/jsonl; dead handles show `NOT FOUND`. Suspended/not_found are
 permanent verdicts: they never trigger retries, never fail over to the next
@@ -130,6 +129,27 @@ suspended handle as plain not found — for suspension audits prefer
 `--provider fxtwitter` (explicit `reason: suspended`, verified live) or
 `twitterapi.io` (`unavailableReason`), optionally chained
 (`--provider twitterapi.io,fxtwitter`).
+
+## Post analytics
+
+Yes — a handle is all it takes. Profile lookup resolves followers while
+the timeline endpoint returns each recent post with its views, likes,
+reposts, replies, bookmarks and quotes:
+
+```bash
+# top posts + view stats (sum/mean/median/max) per account, comparison table
+x-followers -i accounts.txt --posts --max-posts 150 --top-n 5
+
+# same as CSV for spreadsheets, plus every post for drill-down
+x-followers -i accounts.txt --posts --max-posts 150 --format csv \
+  -o stats.csv --posts-dump posts.jsonl --state posts.jsonl --resume
+```
+
+Notes: free `--provider fxtwitter` timeline (~6 calls per 150 posts,
+still $0). Reposts of *other* people's posts are excluded from stats by
+default (counted as `n_reposts_skipped`; `--include-reposts` keeps them).
+`--posts` needs a timeline provider (`fxtwitter`); uses its own
+`--state` file, not one from follower runs.
 
 ## Library use
 

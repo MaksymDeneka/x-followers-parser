@@ -1,5 +1,6 @@
 """x_followers_parser: handles in -> follower counts out. No UI."""
 
+from .analytics import get_post_analytics, summarize
 from .handles import (creds_field, is_url, looks_like_creds, normalize_handle,
                         parse_handles, parse_handles_strict)
 from .parser import BulkAborted, get_followers
@@ -22,6 +23,7 @@ __all__ = [
     "classify_status",
     "creds_field",
     "get_followers",
+    "get_post_analytics",
     "get_provider",
     "is_transient_error",
     "is_url",
@@ -30,6 +32,7 @@ __all__ = [
     "normalize_handle",
     "parse_handles",
     "parse_handles_strict",
+    "summarize",
 ]
 
 __version__ = "0.1.0"

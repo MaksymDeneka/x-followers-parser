@@ -20,12 +20,20 @@ def creds_field(line: str, index: int = 0) -> Optional[str]:
 
     Only this field is ever used — passwords, emails, tokens in the other
     fields are never read beyond splitting the line.
+    A row without any colon (CSV-ish `handle,password,...`) counts as a
+    single field 0, so its handle is still found; any other index is None.
     Returns None when the field is missing or blank.
     """
-    parts = str(line or "").split(":")
-    if len(parts) < 2 or index < 0 or index >= len(parts):
+    text = str(line or "")
+    if ":" in text:
+        parts = text.split(":")
+        if len(parts) < 2 or index < 0 or index >= len(parts):
+            return None
+        field = parts[index].strip().strip("\"'")
+    elif index == 0:
+        field = text.strip().strip("\"'")
+    else:
         return None
-    field = parts[index].strip().strip("\"'")
     return field or None
 
 

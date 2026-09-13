@@ -10,7 +10,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 USER_AGENT = "x-followers-parser/0.1.0 (+https://x.com)"
 
@@ -141,6 +141,8 @@ class BaseProvider:
     rate_note = ""
     # True when fetch_many serves many handles per HTTP call (official batch).
     batches = False
+    # True when fetch_timeline_page serves recent posts (post analytics).
+    supports_timeline = False
 
     def fetch_one(self, username: str, timeout: int = 15) -> FetchResult:
         raise NotImplementedError
@@ -148,6 +150,24 @@ class BaseProvider:
     def fetch_many(self, usernames: List[str], timeout: int = 15) -> List[FetchResult]:
         # Default: sequential single fetches. Subclasses may override (batching).
         return [self.fetch_one(u, timeout=timeout) for u in usernames]
+
+    def fetch_timeline_page(self, username: str, count: int = 20,
+                            cursor: Optional[str] = None,
+                            timeout: int = 15,
+                            with_replies: bool = False,
+                            ) -> Tuple[List[dict], Optional[str]]:
+        """One page of the account's recent posts (newest first).
+
+        Returns (posts, next_cursor). Posts are normalized dicts:
+        {"id","url","text","created_at","created_timestamp","views","likes",
+         "reposts","replies","bookmarks","quotes","is_repost","author"}.
+        next_cursor is None when the timeline is exhausted.
+        Raises ProviderError on failure (message classifies transient vs
+        permanent via is_transient_error / classify_status).
+        Default: not supported (only providers with a timeline implement it).
+        """
+        raise ProviderError(
+            "provider %r has no post-timeline endpoint" % self.name)
 
 
 def _fx_error(username: str, data: dict) -> FetchResult:
@@ -174,6 +194,39 @@ def _fx_error(username: str, data: dict) -> FetchResult:
     return FetchResult(username=username, ok=False, error=str(msg))
 
 
+def _fx_post(item: dict, fallback_author: str = "?") -> Optional[dict]:
+    """Normalize one FxTwitter timeline entry to a post dict.
+
+    Returns None for non-post entries (thread-group wrappers etc.).
+    A repost of someone else's post surfaces with `reposted_by` set and
+    the original author in `author` — flagged as is_repost so analytics
+    can exclude amplified content from own-post stats.
+    View/like/... counters may be absent on tombstones; missing stays None
+    (stats skip Nones rather than counting them as zero).
+    """
+    if not isinstance(item, dict) or item.get("type") not in ("status", None):
+        # "thread" group entries (only with groupthreads) and tombstones
+        # carry no per-post counters worth analyzing.
+        if item.get("type") != "status":
+            return None
+    author = item.get("author") or {}
+    return {
+        "id": str(item.get("id") or ""),
+        "url": item.get("url") or "",
+        "text": item.get("text") or "",
+        "created_at": item.get("created_at") or "",
+        "created_timestamp": _to_int(item.get("created_timestamp")),
+        "views": _to_int(item.get("views")),
+        "likes": _to_int(item.get("likes")),
+        "reposts": _to_int(item.get("reposts")),
+        "replies": _to_int(item.get("replies")),
+        "bookmarks": _to_int(item.get("bookmarks")),
+        "quotes": _to_int(item.get("quotes")),
+        "is_repost": item.get("reposted_by") is not None,
+        "author": author.get("screen_name") or fallback_author,
+    }
+
+
 class FxTwitterProvider(BaseProvider):
     """Free, no-auth provider backed by the FxTwitter API.
 
@@ -189,6 +242,7 @@ class FxTwitterProvider(BaseProvider):
     """
     name = "fxtwitter"
     BASE = "https://api.fxtwitter.com/2/profile"
+    supports_timeline = True
     requests_per_handle = 1.0
     cost_per_1k_usd = 0.0
     rate_note = ("~1000 req/min per IP (1 req/handle). "
@@ -225,6 +279,41 @@ class FxTwitterProvider(BaseProvider):
             )
         except (ValueError, TypeError, AttributeError) as e:
             return FetchResult(username=username, ok=False, error="parse error: %s" % e)
+
+    def fetch_timeline_page(self, username: str, count: int = 20,
+                            cursor: Optional[str] = None,
+                            timeout: int = 15,
+                            with_replies: bool = False,
+                            ) -> Tuple[List[dict], Optional[str]]:
+        """One page of GET /2/profile/{handle}/statuses (newest first).
+
+        Upstream picks its own page size (often more than `count`), so
+        callers must truncate to their budget. A null/unchanged bottom
+        cursor or empty results means the timeline is exhausted.
+        Suspended/missing accounts raise permanent errors; 429/5xx raise
+        transient ones (both classified by is_transient_error).
+        """
+        params = {"count": str(max(1, min(int(count or 20), 100)))}
+        if cursor:
+            params["cursor"] = cursor
+        if with_replies:
+            params["with_replies"] = "1"
+        url = "%s/%s/statuses?%s" % (
+            self.BASE, urllib.parse.quote(username, safe=""),
+            urllib.parse.urlencode(params))
+        data = _http_get_json(url, timeout=timeout)  # raises on 429/5xx
+        if not isinstance(data, dict):
+            raise ProviderError("unexpected response shape")
+        if data.get("code") not in (200, None) or not isinstance(
+                data.get("results"), list):
+            # error envelope, e.g. suspended timeline or "search unavailable"
+            raise ProviderError(str(data.get("message") or "timeline unavailable"))
+        posts = [p for p in (_fx_post(it, username) for it in data["results"])
+                 if p is not None]
+        nxt = (data.get("cursor") or {}).get("bottom")
+        if nxt == cursor:  # unchanged cursor: upstream has no more pages
+            nxt = None
+        return posts, nxt
 
 
 def _sleep_incremental(seconds: float, slice_s: float = 5.0) -> None:
@@ -483,6 +572,11 @@ class ChainProvider(BaseProvider):
         return getattr(self.providers[0], "batches", False)
 
     @property
+    def supports_timeline(self) -> bool:  # type: ignore[override]
+        return any(getattr(p, "supports_timeline", False)
+                   for p in self.providers)
+
+    @property
     def name(self) -> str:  # type: ignore[override]
         return "+".join(p.name for p in self.providers)
 
@@ -542,6 +636,29 @@ class ChainProvider(BaseProvider):
             else:
                 out.append(ChainProvider(rest).fetch_one(u, timeout=timeout))
         return out
+
+    def fetch_timeline_page(self, username: str, count: int = 20,
+                            cursor: Optional[str] = None,
+                            timeout: int = 15,
+                            with_replies: bool = False,
+                            ) -> Tuple[List[dict], Optional[str]]:
+        # Timelines don't batch: use the first chain member that has one,
+        # failing over to the next member only on transient errors.
+        last_err: Optional[str] = None
+        for p in self.providers:
+            if not getattr(p, "supports_timeline", False):
+                continue
+            try:
+                return p.fetch_timeline_page(
+                    username, count=count, cursor=cursor, timeout=timeout,
+                    with_replies=with_replies)
+            except ProviderError as e:
+                last_err = str(e)
+                if not is_transient_error(last_err):
+                    raise
+            except Exception as e:
+                last_err = "request failed: %s: %s" % (type(e).__name__, e)
+        raise ProviderError(last_err or "no chain member has a post timeline")
 
 
 _PROVIDER_ALIASES = {
